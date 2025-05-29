@@ -1,0 +1,725 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mapa de Semáforos com OpenStreetMap</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+     crossorigin=""/>
+    <style>
+        #map {
+            height: 70vh;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            background-color: #f0f0f0; /* Cor de fundo enquanto o mapa carrega */
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .modal {
+            display: none; /* Escondido por defeito */
+            position: fixed;
+            z-index: 10000; /* Acima do Leaflet */
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.5);
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-content {
+            background-color: #fefefe;
+            margin: auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 80%;
+            max-width: 500px;
+            border-radius: 0.5rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+        }
+        .close-button {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+        }
+        .close-button:hover,
+        .close-button:focus {
+            color: black;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .leaflet-control-zoom { /* Garante que controlos do Leaflet fiquem visíveis */
+            z-index: 1000;
+        }
+        .leaflet-tile-pane { /* Garante que o mapa fique visível */
+            z-index: 1;
+        }
+        /* Classe para cursor crosshair no Leaflet */
+        .crosshair-cursor .leaflet-grab {
+            cursor: crosshair !important;
+        }
+        /* Estilo para os ícones SVG de semáforo */
+        .semaphore-svg-icon {
+            background: none !important; /* Remove qualquer fundo padrão do divIcon */
+            border: none !important; /* Remove qualquer borda padrão do divIcon */
+            filter: drop-shadow(1px 1px 1px rgba(0,0,0,0.3)); /* Sombra leve */
+        }
+    </style>
+</head>
+<body class="bg-gray-100 flex flex-col items-center justify-center min-h-screen p-4">
+
+    <div class="bg-white p-6 sm:p-8 rounded-xl shadow-2xl w-full max-w-3xl">
+        <h1 class="text-2xl sm:text-3xl font-bold text-center text-red-600 mb-2">Mapa de Semáforos (OpenStreetMap)</h1>
+        <p class="text-center text-xs text-gray-500 mb-1">Geocodificação por Nominatim (OpenStreetMap). Respeite a política de uso.</p>
+        <p class="text-center text-sm text-gray-600 mb-1">UserID: <span id="userIdDisplay">A carregar...</span></p>
+        <p class="text-center text-xs text-gray-500 mb-4">AppID: <span id="appIdDisplay">A carregar...</span></p>
+
+        <div class="mb-6 space-y-4">
+            <div class="sm:flex sm:space-x-4 space-y-4 sm:space-y-0">
+                <input type="text" id="address" placeholder="Procurar endereço" class="flex-grow p-3 border border-gray-300 rounded-lg shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none w-full">
+                <button id="searchButton" class="w-full sm:w-auto bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 px-4 rounded-lg shadow-md transition duration-150">
+                    Procurar
+                </button>
+            </div>
+            <div class="flex flex-col sm:flex-row space-y-2 sm:space-y-0 sm:space-x-2">
+                <button id="currentLocationButton" class="w-full sm:w-auto bg-green-500 hover:bg-green-600 text-white font-semibold py-3 px-4 rounded-lg shadow-md transition duration-150">
+                    Minha Localização
+                </button>
+                <button id="addSemaphoreModeButton" class="w-full sm:w-auto bg-red-500 hover:bg-red-600 text-white font-semibold py-3 px-4 rounded-lg shadow-md transition duration-150">
+                    Adicionar Semáforo (Clique no Mapa)
+                </button>
+            </div>
+        </div>
+
+        <div id="map" class="w-full rounded-lg shadow-md border border-gray-200">
+            <div class="flex items-center justify-center h-full text-gray-500">A carregar mapa...</div>
+        </div>
+
+        <div id="message" class="mt-4 text-center text-sm min-h-[1.25em]"></div>
+    </div>
+
+    <div id="semaphoreModal" class="modal">
+        <div class="modal-content">
+            <span class="close-button" id="closeModalButton">×</span>
+            <h2 class="text-xl font-semibold mb-4 text-gray-700">Adicionar Novo Semáforo</h2>
+            <p class="text-sm text-gray-600 mb-1">Localização: <span id="modalCoords"></span></p>
+            <input type="hidden" id="semaphoreLat">
+            <input type="hidden" id="semaphoreLng">
+            <div class="space-y-3">
+                <div>
+                    <label for="timeGreen" class="block text-sm font-medium text-gray-700">Tempo Verde (s):</label>
+                    <input type="number" id="timeGreen" value="30" min="1" class="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                </div>
+                <div>
+                    <label for="timeYellow" class="block text-sm font-medium text-gray-700">Tempo Amarelo (s):</label>
+                    <input type="number" id="timeYellow" value="3" min="1" class="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                </div>
+                <div>
+                    <label for="timeRed" class="block text-sm font-medium text-gray-700">Tempo Vermelho (s):</label>
+                    <input type="number" id="timeRed" value="60" min="1" class="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                </div>
+                 <div>
+                    <label for="initialState" class="block text-sm font-medium text-gray-700">Estado Inicial no Registo:</label>
+                    <select id="initialState" class="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                        <option value="green" selected>Verde</option>
+                        <option value="yellow">Amarelo</option>
+                        <option value="red">Vermelho</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="timeIntoInitialState" class="block text-sm font-medium text-gray-700">Tempo decorrido no estado inicial (s):</label>
+                    <input type="number" id="timeIntoInitialState" value="0" min="0" class="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                </div>
+            </div>
+            <div class="mt-6 flex justify-end space-x-3">
+                <button id="cancelSemaphoreButton" class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-md shadow-sm">Cancelar</button>
+                <button id="saveSemaphoreButton" class="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-md shadow-sm">Salvar Semáforo</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="deleteConfirmModal" class="modal">
+        <div class="modal-content">
+            <h2 class="text-xl font-semibold mb-4 text-gray-700">Confirmar Exclusão</h2>
+            <p class="text-sm text-gray-600 mb-4">Tem certeza de que deseja excluir este semáforo? Esta ação não pode ser desfeita.</p>
+            <input type="hidden" id="semaphoreIdToDelete">
+            <div class="mt-6 flex justify-end space-x-3">
+                <button id="cancelDeleteButton" class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 hover:bg-gray-300 rounded-md shadow-sm">Cancelar</button>
+                <button id="confirmDeleteButton" class="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-md shadow-sm">Excluir</button>
+            </div>
+        </div>
+    </div>
+
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+     integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+     crossorigin=""></script>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, collection, onSnapshot, serverTimestamp, GeoPoint, Timestamp, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js"; // Adicionado deleteDoc
+        import { getAnalytics, setUserId as setAnalyticsUserId } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js";
+
+        const firebaseConfigFromEnv = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+        console.log("__firebase_config (do ambiente):", typeof __firebase_config !== 'undefined' ? __firebase_config : "Não definido");
+
+        const firebaseConfig = firebaseConfigFromEnv || {
+         apiKey: "AIzaSyDwyTt1VeUZeWJuet8_8ccMC2H5DrZUVnY",
+
+        authDomain: "meu-mapa-semaforos.firebaseapp.com",
+
+        projectId: "meu-mapa-semaforos",
+
+        storageBucket: "meu-mapa-semaforos.firebasestorage.app",
+
+        messagingSenderId: "878499648014",
+
+        appId: "1:878499648014:web:d63385f7acbe7fd600a25f"
+
+        };
+        
+        console.log("Firebase Config a ser utilizada:", firebaseConfig); 
+        if (firebaseConfigFromEnv) {
+            console.log("A usar firebaseConfig fornecida pelo ambiente.");
+        } else {
+            console.log("A usar firebaseConfig codificada no HTML. CERTIFIQUE-SE DE QUE ESTÁ CORRETA E NÃO TEM PLACEHOLDERS!");
+        }
+
+        let map;
+        let userMarker;
+        let isAddingSemaphoreMode = false;
+        let tempSemaphoreLocation = null;
+        let semaphoreMarkers = {}; 
+        let semaphoresData = {}; 
+
+        const messageDiv = document.getElementById('message');
+        const semaphoreModal = document.getElementById('semaphoreModal');
+        const closeModalButton = document.getElementById('closeModalButton');
+        const mapDiv = document.getElementById('map');
+        const deleteConfirmModal = document.getElementById('deleteConfirmModal');
+
+        let app;
+        let auth;
+        let db;
+        let analytics; 
+        let currentUserId = null;
+        let currentAppId = 'default-app-id'; 
+
+        // Função para criar SVG do ícone de semáforo
+        function createSemaphoreIconSVG(activeLight = 'none') {
+            const корпусЦвет = '#2D3748'; // Cinza escuro para o corpo (Tailwind gray-800)
+            const светВыкл = '#A0AEC0'; // Cinza claro para luz desligada (Tailwind gray-500)
+
+            let красныйЦвет = светВыкл;
+            let желтыйЦвет = светВыкл;
+            let зеленыйЦвет = светВыкл;
+
+            if (activeLight === 'red') красныйЦвет = '#F56565';    // Tailwind red-500
+            else if (activeLight === 'yellow') желтыйЦвет = '#ECC94B'; // Tailwind yellow-500
+            else if (activeLight === 'green') зеленыйЦвет = '#48BB78';  // Tailwind green-500
+
+            return `
+                <svg width="28" height="70" viewBox="0 0 28 70" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="4" y="2" width="20" height="66" rx="4" fill="${корпусЦвет}" stroke="#1A202C" stroke-width="1.5"/>
+                    <circle cx="14" cy="15" r="7" fill="${красныйЦвет}" stroke="#1A202C" stroke-width="1"/>
+                    <circle cx="14" cy="35" r="7" fill="${желтыйЦвет}" stroke="#1A202C" stroke-width="1"/>
+                    <circle cx="14" cy="55" r="7" fill="${зеленыйЦвет}" stroke="#1A202C" stroke-width="1"/>
+                </svg>
+            `;
+        }
+        
+        // Definições dos ícones do Leaflet usando L.divIcon com SVGs
+        const semaphoreIcons = {
+            red: L.divIcon({
+                html: createSemaphoreIconSVG('red'),
+                className: 'semaphore-svg-icon', 
+                iconSize: [28, 70], 
+                iconAnchor: [14, 70], // Ancorar na base central do ícone
+                popupAnchor: [0, -70]  // Popup acima do ícone
+            }),
+            yellow: L.divIcon({
+                html: createSemaphoreIconSVG('yellow'),
+                className: 'semaphore-svg-icon',
+                iconSize: [28, 70],
+                iconAnchor: [14, 70],
+                popupAnchor: [0, -70]
+            }),
+            green: L.divIcon({
+                html: createSemaphoreIconSVG('green'),
+                className: 'semaphore-svg-icon',
+                iconSize: [28, 70],
+                iconAnchor: [14, 70],
+                popupAnchor: [0, -70]
+            }),
+            unknown: L.divIcon({
+                html: createSemaphoreIconSVG('none'), // Todas as luzes desligadas
+                className: 'semaphore-svg-icon',
+                iconSize: [28, 70],
+                iconAnchor: [14, 70],
+                popupAnchor: [0, -70]
+            })
+        };
+
+        const userIcon = L.icon({
+            iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-blue.png',
+            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+            iconSize: [25, 41], iconAnchor: [12, 41], popupAnchor: [1, -34], shadowSize: [41, 41]
+        });
+
+        async function initApp() {
+            console.log("A iniciar initApp()...");
+            try {
+                if (!firebaseConfig || !firebaseConfig.apiKey || firebaseConfig.apiKey === "SUA_API_KEY" || 
+                    !firebaseConfig.authDomain || firebaseConfig.authDomain === "SEU_AUTH_DOMAIN" ||
+                    !firebaseConfig.projectId || firebaseConfig.projectId === "SEU_PROJECT_ID" ) { 
+                    mapDiv.innerHTML = '<div class="flex items-center justify-center h-full text-red-500 p-4">Configuração do Firebase não encontrada, incompleta ou com placeholders. Verifique o objeto `firebaseConfig` no código.</div>';
+                    console.error("Firebase config está ausente, incompleta ou com placeholders. VERIFIQUE O OBJETO 'firebaseConfig' E SUBSTITUA OS VALORES 'SUA_API_KEY', 'SEU_AUTH_DOMAIN', ETC., PELOS SEUS DADOS REAIS DO FIREBASE CONSOLE.");
+                    return;
+                }
+
+                console.log("A inicializar Firebase com a configuração:", firebaseConfig);
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                
+                if (firebaseConfig.measurementId && firebaseConfig.measurementId !== "SEU_MEASUREMENT_ID") {
+                    analytics = getAnalytics(app);
+                    console.log("Firebase Analytics inicializado.");
+                }
+
+                currentAppId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+                document.getElementById('appIdDisplay').textContent = currentAppId;
+                console.log("currentAppId definido como:", currentAppId);
+
+                console.log("A configurar onAuthStateChanged listener...");
+                onAuthStateChanged(auth, (user) => {
+                    if (user) { 
+                        currentUserId = user.uid;
+                        console.log("Utilizador autenticado com UID:", currentUserId);
+                        document.getElementById('userIdDisplay').textContent = currentUserId;
+                        if (analytics) {
+                            setAnalyticsUserId(analytics, currentUserId); 
+                            console.log("User ID enviado para o Analytics:", currentUserId);
+                        }
+                        
+                        if (!map) {
+                            console.log("Mapa não inicializado, a chamar initMapWithLeaflet().");
+                            initMapWithLeaflet(); 
+                        } else {
+                            console.log("Mapa já inicializado.");
+                        }
+                        loadSemaphores(); 
+                    } else { 
+                        console.log("Nenhum utilizador logado. A tentar autenticação...");
+                        document.getElementById('userIdDisplay').textContent = "A autenticar...";
+                        
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                             console.log("A tentar login com __initial_auth_token...");
+                             signInWithCustomToken(auth, __initial_auth_token)
+                                .catch(error => {
+                                    console.error("Erro no login com Custom Token:", error);
+                                    messageDiv.textContent = `Erro Custom Token: ${error.code}. Verifique o console.`;
+                                    signInAnonymously(auth).catch(err => {
+                                        console.error("Erro no login anónimo pós falha no custom token:", err);
+                                        messageDiv.textContent = `Erro Auth Anónimo: ${err.code}. Verifique as configurações do Firebase Console.`;
+                                        document.getElementById('userIdDisplay').textContent = "Não autenticado";
+                                        if (!map) initMapWithLeaflet(); 
+                                    });
+                                });
+                        } else {
+                            console.log("Nenhum __initial_auth_token encontrado, a tentar login anónimo diretamente...");
+                            signInAnonymously(auth).catch(err => {
+                                console.error("Erro no login anónimo:", err);
+                                if (err.code === 'auth/configuration-not-found') {
+                                    messageDiv.textContent = "Falha na autenticação (auth/configuration-not-found): VERIFIQUE: 1. Firebase Authentication está habilitado no Firebase Console? 2. Provedor 'Anônimo' está ATIVO? 3. A 'apiKey' e outros dados em 'firebaseConfig' no código estão CORRETOS e correspondem ao seu projeto? 4. A API Key no Google Cloud Console NÃO TEM restrições que bloqueiem 'Identity Toolkit API'?";
+                                } else {
+                                    messageDiv.textContent = `Falha na autenticação (${err.code}). Funcionalidades de salvamento podem não funcionar. Verifique o console.`;
+                                }
+                                document.getElementById('userIdDisplay').textContent = "Não autenticado";
+                                if (!map) initMapWithLeaflet(); 
+                            });
+                        }
+                    }
+                });
+
+            } catch (error) {
+                console.error("Erro crítico ao inicializar Firebase em initApp():", error);
+                mapDiv.innerHTML = `<div class="flex items-center justify-center h-full text-red-600 p-4">Erro Firebase: ${error.message}. Verifique a configuração e o console.</div>`;
+            }
+        }
+        window.initApp = initApp; 
+
+        function initMapWithLeaflet() {
+            if (map) {
+                console.log("initMapWithLeaflet chamado, mas mapa já existe.");
+                return; 
+            }
+            console.log("A inicializar mapa com Leaflet...");
+            mapDiv.innerHTML = ''; 
+            const initialCoords = [-9.66599, -35.73515]; 
+            map = L.map('map').setView(initialCoords, 13); 
+
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }).addTo(map);
+
+            document.getElementById('searchButton').addEventListener('click', searchAddressWithNominatim);
+            document.getElementById('address').addEventListener('keypress', (e) => { if (e.key === 'Enter') searchAddressWithNominatim(); });
+            document.getElementById('currentLocationButton').addEventListener('click', getCurrentLocation);
+            document.getElementById('addSemaphoreModeButton').addEventListener('click', toggleAddSemaphoreMode);
+            closeModalButton.addEventListener('click', closeModal);
+            document.getElementById('cancelSemaphoreButton').addEventListener('click', closeModal);
+            document.getElementById('saveSemaphoreButton').addEventListener('click', saveSemaphore);
+
+            // Listeners para o modal de confirmação de exclusão
+            document.getElementById('cancelDeleteButton').addEventListener('click', () => {
+                deleteConfirmModal.style.display = 'none';
+                document.getElementById('semaphoreIdToDelete').value = '';
+            });
+            document.getElementById('confirmDeleteButton').addEventListener('click', deleteSemaphoreFromFirestore);
+
+
+            map.on('click', (e) => {
+                if (isAddingSemaphoreMode) {
+                    tempSemaphoreLocation = e.latlng; 
+                    document.getElementById('modalCoords').textContent = `${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`;
+                    document.getElementById('semaphoreLat').value = e.latlng.lat;
+                    document.getElementById('semaphoreLng').value = e.latlng.lng;
+                    semaphoreModal.style.display = 'flex'; 
+                    
+                    isAddingSemaphoreMode = false; 
+                    L.DomUtil.removeClass(map.getContainer(), 'crosshair-cursor');
+                    const btn = document.getElementById('addSemaphoreModeButton');
+                    btn.textContent = 'Adicionar Semáforo (Clique no Mapa)';
+                    btn.classList.remove('bg-yellow-500', 'hover:bg-yellow-600');
+                    btn.classList.add('bg-red-500', 'hover:bg-red-600');
+                    messageDiv.textContent = "";
+                }
+            });
+            console.log("Mapa Leaflet inicializado e listeners configurados.");
+            setInterval(updateAllSemaphoreStates, 1000);
+        }
+
+        function toggleAddSemaphoreMode() {
+            isAddingSemaphoreMode = !isAddingSemaphoreMode;
+            const btn = document.getElementById('addSemaphoreModeButton');
+            if (isAddingSemaphoreMode) {
+                L.DomUtil.addClass(map.getContainer(), 'crosshair-cursor'); 
+                btn.textContent = 'Modo Adição Ativado (Clique no Mapa)';
+                btn.classList.remove('bg-red-500', 'hover:bg-red-600');
+                btn.classList.add('bg-yellow-500', 'hover:bg-yellow-600');
+                messageDiv.textContent = "Clique no mapa para escolher a localização do novo semáforo.";
+            } else {
+                L.DomUtil.removeClass(map.getContainer(), 'crosshair-cursor'); 
+                btn.textContent = 'Adicionar Semáforo (Clique no Mapa)';
+                btn.classList.remove('bg-yellow-500', 'hover:bg-yellow-600');
+                btn.classList.add('bg-red-500', 'hover:bg-red-600');
+                messageDiv.textContent = "";
+            }
+        }
+
+        function closeModal() {
+            semaphoreModal.style.display = 'none';
+            if (isAddingSemaphoreMode) {
+                toggleAddSemaphoreMode(); 
+            }
+        }
+
+        // Função para abrir o modal de confirmação de exclusão
+        function promptDeleteSemaphore(semaphoreId) {
+            if (!semaphoreId) {
+                console.error("ID do semáforo não fornecido para exclusão.");
+                return;
+            }
+            document.getElementById('semaphoreIdToDelete').value = semaphoreId;
+            deleteConfirmModal.style.display = 'flex';
+        }
+
+        // Função para lidar com o clique no botão de excluir dentro do popup
+        function handleDeleteButtonClick(event) {
+            const semaphoreId = event.target.dataset.id;
+            if (semaphoreId) {
+                promptDeleteSemaphore(semaphoreId);
+            } else {
+                console.error("Não foi possível obter o ID do semáforo do botão de exclusão.");
+            }
+        }
+
+
+        async function saveSemaphore() {
+            if (!currentUserId) {
+                messageDiv.textContent = "Autenticação é necessária para salvar semáforos."; 
+                return;
+            }
+            if (!tempSemaphoreLocation) {
+                 messageDiv.textContent = "Localização do semáforo não definida. Clique no mapa primeiro.";
+                 return;
+            }
+
+            const timeGreen = parseInt(document.getElementById('timeGreen').value);
+            const timeYellow = parseInt(document.getElementById('timeYellow').value);
+            const timeRed = parseInt(document.getElementById('timeRed').value);
+            const initialState = document.getElementById('initialState').value;
+            const timeIntoInitialState = parseInt(document.getElementById('timeIntoInitialState').value);
+
+            if (isNaN(timeGreen) || isNaN(timeYellow) || isNaN(timeRed) || timeGreen <= 0 || timeYellow <= 0 || timeRed <= 0 || isNaN(timeIntoInitialState) || timeIntoInitialState < 0) {
+                messageDiv.textContent = "Por favor, insira tempos válidos (números positivos maiores que zero).";
+                return;
+            }
+            if ( (initialState === 'green' && timeIntoInitialState >= timeGreen) ||
+                 (initialState === 'yellow' && timeIntoInitialState >= timeYellow) ||
+                 (initialState === 'red' && timeIntoInitialState >= timeRed) ) {
+                messageDiv.textContent = "Tempo decorrido no estado inicial não pode ser maior ou igual à duração do próprio estado.";
+                return;
+            }
+
+            const semaphoreData = {
+                location: new GeoPoint(tempSemaphoreLocation.lat, tempSemaphoreLocation.lng), 
+                timeGreen: timeGreen,
+                timeYellow: timeYellow,
+                timeRed: timeRed,
+                initialState: initialState,
+                timeIntoInitialState: timeIntoInitialState,
+                criadoEm: serverTimestamp(), 
+                userId: currentUserId 
+            };
+
+            try {
+                const semaphoreCollectionPath = `artifacts/${currentAppId}/users/${currentUserId}/semaforos`;
+                const newSemaphoreRef = doc(collection(db, semaphoreCollectionPath)); 
+                await setDoc(newSemaphoreRef, semaphoreData); 
+
+                messageDiv.textContent = "Semáforo salvo com sucesso!";
+                closeModal();
+                tempSemaphoreLocation = null; 
+            } catch (error) {
+                console.error("Erro ao salvar semáforo no Firestore: ", error);
+                messageDiv.textContent = "Erro ao salvar semáforo: " + error.message;
+            }
+        }
+        
+        async function deleteSemaphoreFromFirestore() {
+            const semaphoreId = document.getElementById('semaphoreIdToDelete').value;
+            if (!semaphoreId) {
+                console.error("Nenhum ID de semáforo para excluir.");
+                messageDiv.textContent = "Erro: ID do semáforo não encontrado para exclusão.";
+                deleteConfirmModal.style.display = 'none';
+                return;
+            }
+            if (!currentUserId) {
+                messageDiv.textContent = "Autenticação necessária para excluir.";
+                console.warn("Tentativa de excluir sem autenticação.");
+                deleteConfirmModal.style.display = 'none';
+                return;
+            }
+
+            const semaphoreDocPath = `artifacts/${currentAppId}/users/${currentUserId}/semaforos/${semaphoreId}`;
+            console.log("A tentar excluir semáforo em:", semaphoreDocPath);
+
+            try {
+                await deleteDoc(doc(db, semaphoreDocPath));
+                messageDiv.textContent = "Semáforo excluído com sucesso!";
+                console.log("Semáforo excluído do Firestore:", semaphoreId);
+            } catch (error) {
+                console.error("Erro ao excluir semáforo do Firestore:", error);
+                messageDiv.textContent = "Erro ao excluir semáforo: " + error.message;
+            } finally {
+                deleteConfirmModal.style.display = 'none';
+                document.getElementById('semaphoreIdToDelete').value = ''; 
+            }
+        }
+
+
+        function loadSemaphores() {
+            if (!currentUserId || !map) { 
+                return;
+            }
+            const semaphoreCollectionPath = `artifacts/${currentAppId}/users/${currentUserId}/semaforos`;
+            const q = collection(db, semaphoreCollectionPath);
+
+            onSnapshot(q, (querySnapshot) => {
+                const currentIdsOnMap = Object.keys(semaphoreMarkers);
+                const idsFromFirestore = [];
+
+                querySnapshot.forEach((docSnapshot) => {
+                    const semaphoreId = docSnapshot.id;
+                    idsFromFirestore.push(semaphoreId);
+                    const data = docSnapshot.data();
+                    semaphoresData[semaphoreId] = data; 
+                    const latLng = [data.location.latitude, data.location.longitude];
+
+                    const popupContent = `
+                        <div class="p-1">
+                            <strong class="text-sm">ID:</strong> <span class="text-xs">${semaphoreId.substring(0, 6)}...</span><br>
+                            <strong class="text-sm">Tempos (V/A/V):</strong> ${data.timeGreen}s / ${data.timeYellow}s / ${data.timeRed}s<br>
+                            <button class="delete-semaphore-btn mt-2 px-2 py-1 bg-red-500 text-white text-xs rounded hover:bg-red-700 w-full" data-id="${semaphoreId}">Excluir Semáforo</button>
+                        </div>
+                    `;
+
+                    if (semaphoreMarkers[semaphoreId]) { 
+                        semaphoreMarkers[semaphoreId].setLatLng(latLng).setPopupContent(popupContent);
+                    } else { 
+                        semaphoreMarkers[semaphoreId] = L.marker(latLng, {
+                            icon: getSemaphoreLeafletIcon(calculateSemaphoreState(semaphoreId).state)
+                        })
+                        .addTo(map)
+                        .bindPopup(popupContent);
+                        
+                        // Adicionar listener ao botão de excluir quando o popup é aberto
+                        semaphoreMarkers[semaphoreId].on('popupopen', () => {
+                            const delBtn = document.querySelector(`.delete-semaphore-btn[data-id="${semaphoreId}"]`);
+                            if (delBtn) {
+                                // Remover listener antigo para evitar duplicação se o popup for reaberto
+                                delBtn.removeEventListener('click', handleDeleteButtonClick); 
+                                delBtn.addEventListener('click', handleDeleteButtonClick);
+                            }
+                        });
+                    }
+                    updateSemaphoreMarkerState(semaphoreId, data); 
+                });
+
+                currentIdsOnMap.forEach(markerId => {
+                    if (!idsFromFirestore.includes(markerId)) {
+                        if (semaphoreMarkers[markerId]) map.removeLayer(semaphoreMarkers[markerId]);
+                        delete semaphoreMarkers[markerId];
+                        delete semaphoresData[markerId]; 
+                    }
+                });
+            }, (error) => {
+                console.error("Erro ao carregar semáforos do Firestore via onSnapshot:", error);
+                messageDiv.textContent = "Erro ao carregar semáforos.";
+            });
+        }
+
+        function calculateSemaphoreState(semaphoreId) {
+            const data = semaphoresData[semaphoreId];
+            if (!data || !data.criadoEm) return { state: 'unknown' };
+
+            const now = new Date().getTime();
+            const criadoTimestamp = data.criadoEm instanceof Timestamp ? data.criadoEm.toDate().getTime() : new Date(data.criadoEm).getTime();
+            
+            let effectiveStartTime = criadoTimestamp;
+            if (data.initialState === 'yellow') {
+                effectiveStartTime -= data.timeGreen * 1000;
+            } else if (data.initialState === 'red') {
+                effectiveStartTime -= (data.timeGreen + data.timeYellow) * 1000;
+            }
+            effectiveStartTime -= data.timeIntoInitialState * 1000; 
+
+            const timeSinceEffectiveStartMs = now - effectiveStartTime;
+            const timeSinceEffectiveStartSeg = Math.floor(timeSinceEffectiveStartMs / 1000);
+
+            const totalCycleTimeSeg = data.timeGreen + data.timeYellow + data.timeRed;
+            if (totalCycleTimeSeg <= 0) return { state: 'unknown' }; 
+
+            const timeIntoCurrentCycleSeg = timeSinceEffectiveStartSeg % totalCycleTimeSeg;
+
+            let currentState = 'unknown';
+            if (timeIntoCurrentCycleSeg < data.timeGreen) {
+                currentState = 'green';
+            } else if (timeIntoCurrentCycleSeg < data.timeGreen + data.timeYellow) {
+                currentState = 'yellow';
+            } else {
+                currentState = 'red';
+            }
+            return { state: currentState };
+        }
+
+        function getSemaphoreLeafletIcon(state) {
+            return semaphoreIcons[state] || semaphoreIcons.unknown;
+        }
+
+        function updateSemaphoreMarkerState(semaphoreId, data) {
+            if (semaphoreMarkers[semaphoreId] && data && map) { 
+                const { state } = calculateSemaphoreState(semaphoreId);
+                semaphoreMarkers[semaphoreId].setIcon(getSemaphoreLeafletIcon(state));
+            }
+        }
+
+        function updateAllSemaphoreStates() {
+            Object.keys(semaphoresData).forEach(id => {
+                updateSemaphoreMarkerState(id, semaphoresData[id]);
+            });
+        }
+
+        async function searchAddressWithNominatim() {
+            const address = document.getElementById('address').value;
+            messageDiv.textContent = '';
+            if (!address) {
+                messageDiv.textContent = 'Por favor, insira um endereço para procurar.'; return;
+            }
+            messageDiv.textContent = 'A procurar endereço...';
+            const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1&accept-language=pt`;
+            try {
+                const response = await fetch(url, { headers: { 'User-Agent': `SemaphoreApp/${currentAppId || 'UnknownApp'}` }}); 
+                if (!response.ok) throw new Error(`Erro na requisição HTTP: ${response.status}`);
+                const data = await response.json();
+
+                if (data && data.length > 0) {
+                    const result = data[0];
+                    const latLng = [parseFloat(result.lat), parseFloat(result.lon)];
+                    map.setView(latLng, 15); 
+                    if (userMarker) map.removeLayer(userMarker); 
+                    userMarker = L.marker(latLng, { icon: userIcon }).addTo(map)
+                        .bindPopup(result.display_name) 
+                        .openPopup();
+                    messageDiv.textContent = 'Endereço encontrado!';
+                } else {
+                    messageDiv.textContent = 'Endereço não encontrado.';
+                }
+            } catch (error) {
+                console.error('Erro na procura com Nominatim:', error);
+                messageDiv.textContent = 'Erro ao procurar endereço. Tente novamente mais tarde.';
+            }
+        }
+
+        function getCurrentLocation() {
+            messageDiv.textContent = '';
+            if (navigator.geolocation) {
+                messageDiv.textContent = 'A obter a sua localização...';
+                navigator.geolocation.getCurrentPosition(
+                    (position) => {
+                        const latLng = [position.coords.latitude, position.coords.longitude];
+                        map.setView(latLng, 16); 
+                        if (userMarker) map.removeLayer(userMarker);
+                        userMarker = L.marker(latLng, { icon: userIcon }).addTo(map)
+                            .bindPopup("Sua Localização Atual")
+                            .openPopup();
+                        messageDiv.textContent = 'Localização encontrada!';
+                        setTimeout(() => messageDiv.textContent = '', 3000); 
+                    },
+                    (error) => {
+                        handleLocationError(true, error);
+                    } 
+                );
+            } else {
+                handleLocationError(false, null);
+            }
+        }
+
+        function handleLocationError(browserHasGeolocation, error) {
+            let msg = '';
+            if (browserHasGeolocation) {
+                switch(error.code) {
+                    case error.PERMISSION_DENIED: msg = "Permissão para Geolocalização negada."; break;
+                    case error.POSITION_UNAVAILABLE: msg = "Informação de localização indisponível."; break;
+                    case error.TIMEOUT: msg = "Tempo esgotado ao tentar obter localização."; break;
+                    default: msg = "Ocorreu um erro desconhecido ao obter localização."; break;
+                }
+            } else {
+                msg = 'O seu navegador não suporta Geolocalização.';
+            }
+            messageDiv.textContent = msg;
+        }
+        
+        initApp();
+
+    </script>
+</body>
+</html>
